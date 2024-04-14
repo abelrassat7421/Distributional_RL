@@ -193,7 +193,7 @@ class DQNAgent:
                 else:
                     next_state = torch.tensor(observation, dtype=torch.float32, device=self.device).unsqueeze(0)  
                     state = next_state
-                    self.check_model_improved += 1
+                    self.check_model_improved += reward
 
         
         print('Complete')
