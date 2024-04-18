@@ -12,12 +12,15 @@ import gym
 from itertools import count
 
 
-class DQNAgent:
+class QuantileDQNAgent:
 
     def __init__(self, config):
         self.config = config 
         self.input_dim = config.input_dim
         self.action_dim = config.action_dim
+
+        self.n_quantiles = config.num_quantiles
+        self.quantile_weights = 1.0 / float(config.num_quantiles)
 
         self.total_steps = 0
         self.num_episodes = config.num_episodes
@@ -34,7 +37,6 @@ class DQNAgent:
         self.target_net = DQNNet(self.input_dim, self.action_dim)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.optimizer = optim.AdamW(self.policy_net.parameters(), lr=self.LR, amsgrad=True)
-        self.criterion = nn.SmoothL1Loss()
 
         self.replay_buffer_size = config.replay_buffer_size
         self.replay_memory = ReplayMemory(self.replay_buffer_size)
@@ -157,7 +159,8 @@ class DQNAgent:
         expected_state_action_values = (next_state_values * self.GAMMA) + reward_batch
 
         # Compute Huber loss
-        loss = self.criterion(state_action_values, expected_state_action_values.unsqueeze(1))
+        criterion = nn.SmoothL1Loss()
+        loss = criterion(state_action_values, expected_state_action_values.unsqueeze(1))
 
         # Optimize the model
         self.optimizer.zero_grad()

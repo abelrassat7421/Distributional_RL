@@ -1,3 +1,4 @@
+# -*- coding:utf-8 -*-
 import torch 
 
 # TODO add a parameter for class initialisation for the type of game 
@@ -22,9 +23,9 @@ class Config:
         self.GAMMA = 0.99
         self.EPS_START = 0.9
         self.EPS_END = 0.05
-        self.EPS_DECAY = 1000
+        self.EPS_DECAY = 100 #1000
         self.TAU = 0.005
-        self.LR = 1e-4
+        self.LR = 1e-3 # 1e-4
 
         # Neural network parameters
         # define optimizer in the Neural net class? TODO optimizer = optim.AdamW(policy_net.parameters(), lr=LR, amsgrad=True)
@@ -45,8 +46,8 @@ class Config:
 
         # Categorical DQN parameters
         self.categorical_Vmin = 0 # TODO probably link to self.z_val_limits for expectile code
-        self.categorical_Vmax = 10
-        self.categorical_n_atoms = 50  
+        self.categorical_Vmax = 70
+        self.categorical_n_atoms = 10  
 
         # Quantile Regression DQN parameters
         self.num_quantiles = 20

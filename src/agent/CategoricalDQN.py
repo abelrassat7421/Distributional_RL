@@ -1,23 +1,32 @@
 # -*- coding:utf-8 -*-
 from src.utils.replay_memory import ReplayMemory, Transition
-from src.utils.epsilon_greedy import select_action
 from src.utils.visualization import plot_durations
 import numpy as np
 import torch.optim as optim
 import torch.nn as nn
 import torch.nn.functional as F
-from collections import deque
-from src.network.DQN_net import *
-import gym
+from src.network.CategoricalDQN_net import *
 from itertools import count
+import random
+import math
+import torch
+import matplotlib.pyplot as plt
 
-
-class DQNAgent:
+class CategoricalDQNAgent:
 
     def __init__(self, config):
         self.config = config 
         self.input_dim = config.input_dim
         self.action_dim = config.action_dim
+        self.vmin = config.categorical_Vmin
+        self.vmax = config.categorical_Vmax
+        self.n_atoms = config.categorical_n_atoms
+        
+        self.atoms = np.linspace(
+            config.categorical_Vmin,
+            config.categorical_Vmax,
+            config.categorical_n_atoms,
+        )  # Z
 
         self.total_steps = 0
         self.num_episodes = config.num_episodes
@@ -30,14 +39,16 @@ class DQNAgent:
 
         self.env = None
         # copying weights of base_net to policy_net and target_net
-        self.policy_net = DQNNet(self.input_dim, self.action_dim)
-        self.target_net = DQNNet(self.input_dim, self.action_dim)
+        self.policy_net = CategoricalDQNNet(self.input_dim, self.action_dim, self.config)
+        self.target_net = CategoricalDQNNet(self.input_dim, self.action_dim, self.config)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.optimizer = optim.AdamW(self.policy_net.parameters(), lr=self.LR, amsgrad=True)
-        self.criterion = nn.SmoothL1Loss()
+        self.criterion = nn.CrossEntropyLoss()
 
         self.replay_buffer_size = config.replay_buffer_size
         self.replay_memory = ReplayMemory(self.replay_buffer_size)
+
+        self.delta_z = (config.categorical_Vmax - config.categorical_Vmin) / float(config.categorical_n_atoms - 1)
 
         # self.keras_check = config.keras_checkpoint
         
@@ -47,6 +58,28 @@ class DQNAgent:
 
         # for select action (epsilon-greedy)
         self.steps_done = 0
+
+        # VISUALISATION
+        # plt.ion()
+        # # Create a figure and axis object
+        # self.fig, self.ax = plt.subplots()
+
+        # # Initialize a line object on the axis; for example, starting with no data
+        # self.line, = self.ax.plot([], [], 'r-')  # 'r-' is the color and line style (red line)
+
+        # # Set axis limits
+        # self.ax.set_xlim(0, 10)
+        # self.ax.set_ylim(-1, 1)
+        # Function to update the plot
+    
+
+    # def update_plot(self, x, y):
+    #     self.line.set_xdata(x)
+    #     self.line.set_ydata(y)
+    #     self.ax.relim()  # Recalculate limits
+    #     self.ax.autoscale_view(True, True, True)  # Autoscale view based on the data
+    #     self.fig.canvas.draw()  # Redraw the figure
+    #     self.fig.canvas.flush_events()  # Process GUI events
 
 
     def transition(self):
@@ -61,7 +94,7 @@ class DQNAgent:
         done: boolean, whether the game has ended or not.
         """
         for i_episode in range(self.num_episodes):
-            state, infor = self.env.reset() 
+            state, info = self.env.reset() 
             state = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
 
             print('Episode: {} Reward: {} Max_Reward: {}'.format(i_episode, self.check_model_improved[0].item(), self.best_max[0].item()))
@@ -69,11 +102,14 @@ class DQNAgent:
             self.check_model_improved = 0
             
             for t in count():
-                action = select_action(self, state)
+                # reshape the input state to a tensor ===> Network ===> action probabilities
+                # size = (1, action dimension, number of atoms)
+                # e.g. size = (1, 2, 51)
+                action = self.select_action(state)
                 observation, reward, terminated, truncated, _ = self.env.step(action.item())
                 reward = torch.tensor([reward], device=self.device)
                 done = terminated or truncated
-
+    
                 if terminated:
                     next_state = None
                 else:
@@ -87,8 +123,6 @@ class DQNAgent:
                 self.total_steps += 1
 
                 # Perform one step of the optimization (on the policy network)
-                # TODO see how to make differently than in Pytorch tutorial: optimize_model()
-                # this is done partly in train_by_replay
                 # Note difference in previous implementation -> cleared buffer after replay 
                 # and waited until buffer size was reached instead of batch size
                 # if len(self.replay_buffer) == self.replay_buffer_size:
@@ -115,6 +149,7 @@ class DQNAgent:
             if self.check_model_improved > self.best_max:
                 self.best_max = self.check_model_improved
 
+
     def train_by_replay(self):
         """
         TD update by replaying the history.
@@ -140,24 +175,60 @@ class DQNAgent:
         action_batch = torch.cat(batch.action)
         reward_batch = torch.cat(batch.reward)
 
-        # Compute Q(s_t, a) - the model computes Q(s_t), then we select the
-        # columns of actions taken. These are the actions which would've been taken
-        # for each batch state according to policy_net
-        state_action_values = self.policy_net(state_batch).gather(1, action_batch)
+        _, histo = self.policy_net(state_batch)
 
         # Compute V(s_{t+1}) for all next states.
         # Expected values of actions for non_final_next_states are computed based
         # on the "older" target_net; selecting their best reward with max(1).values
         # This is merged based on the mask, such that we'll have either the expected
         # state value or 0 in case the state was final.
-        next_state_values = torch.zeros(self.BATCH_SIZE, device=self.device)
+        action_prob_next = torch.zeros(self.BATCH_SIZE, self.action_dim, self.n_atoms, device=self.device)
         with torch.no_grad():
-            next_state_values[non_final_mask] = self.target_net(non_final_next_states).max(1).values
-        # Compute the expected Q values 
-        expected_state_action_values = (next_state_values * self.GAMMA) + reward_batch
+            action_prob_next[non_final_mask], _ = self.target_net(non_final_next_states)
+            action_value_next = np.dot(np.array(action_prob_next), self.atoms)
+            action_next = np.argmax(action_value_next, axis=1)
+            
+            #print("DEBUG: 2: action_prob_next.shape", action_prob_next.shape)
+            # use the optimal actions as index, pick out the probabilities of the optimal action
+            prob_next = action_prob_next[np.arange(self.BATCH_SIZE), action_next, :]
 
-        # Compute Huber loss
-        loss = self.criterion(state_action_values, expected_state_action_values.unsqueeze(1))
+            # match the rewards from the memory to the same size as the prob_next
+            reshaped_reward_batch = torch.tile(reward_batch.reshape(self.BATCH_SIZE, 1), (1, self.n_atoms))
+        
+        # perform TD update 
+        discount = self.GAMMA * non_final_mask
+        atoms_next = reshaped_reward_batch + torch.from_numpy(np.dot(discount.reshape(self.BATCH_SIZE, 1),
+                                      self.atoms.reshape(1, self.n_atoms)))
+        # constrain atoms_next to be within Vmin and Vmax
+        atoms_next = torch.clip(atoms_next, self.vmin, self.vmax)
+        # calculate the floors and ceilings of atom_next
+        b = (atoms_next - self.vmin) / self.delta_z
+        l, u = torch.floor(b).int(), torch.ceil(b).int()
+        # it is important to check if l == u, to avoid histogram collapsing.
+        d_m_l = (u + (l == u) - b) * prob_next
+        d_m_u = (b - l) * prob_next
+
+        # redistribute the target probability histogram (calculation of m)
+        # NOTE that there is an implementation issue
+        # The loss function requires current histogram and target histogram to have the same size
+        # Generally, the loss function should be the categorical cross entropy loss between
+        # P(x, a*): size = (32, 1, 51) and P(x(t+1), a*): size = (32, 1, 51), i.e. only for optimal actions
+        # However, the network generates P(x, a): size = (32, 2, 51), i.e. for all actions
+        # Therefore, I create a tensor with zeros (size = (32, 2, 51)) and update only the probability histogram
+        target_histo = torch.zeros(self.BATCH_SIZE, self.n_atoms)
+
+        for i in range(self.BATCH_SIZE):
+            target_histo[i][action_next[i]] = 0.0  # clear the histogram that needs to be updated
+            for j in range(l[i].size(0)):
+                target_histo[i, l[i][j]] += d_m_l[i][j]  # Update d_m_l
+                target_histo[i, l[i][j]] += d_m_u[i][j]  # Update d_m_u
+        
+        # print("DEBUG: 3: histo.shape, target_histo.shape", histo.shape, target_histo.shape)
+        # Compute CrossEntropyLoss
+        loss = self.criterion(histo, target_histo)
+        print("DEBGGING histo:", histo[0], torch.sum(histo[0]))
+        print("DEBGGING target_histo:", target_histo[0], torch.sum(target_histo[0]))
+        print()
 
         # Optimize the model
         self.optimizer.zero_grad()
@@ -181,7 +252,7 @@ class DQNAgent:
             self.check_model_improved = 0
 
             for t in count():
-                action = select_action(self, state)
+                action = self.select_action(self, state)
                 observation, reward, terminated, truncated, _ = self.env.step(action.item())
                 reward = torch.tensor([reward], device=self.device)
                 done = terminated or truncated 
@@ -195,10 +266,36 @@ class DQNAgent:
                     next_state = torch.tensor(observation, dtype=torch.float32, device=self.device).unsqueeze(0)  
                     state = next_state
                     self.check_model_improved += reward
-
         
         print('Complete')
         # plot_durations(self, show_result=True)
 
+    # NOTE Maybe better to create an abstract class of Agents with this method
+    def select_action(self, state):
+        atoms = torch.linspace(
+            float(self.vmin),
+            float(self.vmax),
+            self.n_atoms,
+        )  # Z
+        
+        sample = random.random()
+        eps_threshold = self.config.EPS_END + (self.config.EPS_START - self.config.EPS_END) * \
+            math.exp(-1. * self.steps_done / self.config.EPS_DECAY)
+        self.steps_done += 1
+        if sample > eps_threshold:
+            with torch.no_grad():
+                # reshape the input state to a tensor ===> Network ===> action probabilities
+                # size = (1, action dimension, number of atoms)
+                # e.g. size = (1, 2, 51)
+                action_prob, _ = self.policy_net(state)
+                action_values = torch.tensordot(action_prob, atoms, dims=1)
+                print("DEBUG: 1: action_values in action selection: ", action_values[0])
 
+                # t.max(1) will return the largest column value of each row.
+                # second column on max result is index of where max element was
+                # found, so we pick action with the larger expected reward.
+                return action_values.max(1).indices.view(1, 1)
+        else:
+            return torch.tensor([[self.env.action_space.sample()]], device=self.device, dtype=torch.long)
 
+    
