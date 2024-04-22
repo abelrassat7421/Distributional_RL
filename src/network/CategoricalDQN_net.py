@@ -6,12 +6,14 @@ import numpy as np
 
 class CategoricalDQNNet(nn.Module):
 
-    def __init__(self, n_observations, n_actions, config):
+    def __init__(self, config):
         super(CategoricalDQNNet, self).__init__()
         # TODO subsume the n_observations and n_actions to the config
         self.config = config
+        self.input_dim = config.input_dim
+        self.action_dim = config.action_dim
         self.num_atoms = config.categorical_n_atoms
-        output_dim = n_actions * self.num_atoms
+        output_dim = self.action_dim * self.num_atoms
 
         self.atoms = torch.linspace(
             float(config.categorical_Vmin),
@@ -19,9 +21,9 @@ class CategoricalDQNNet(nn.Module):
             config.categorical_n_atoms,
         )  # Z
 
-        self.layer1 = nn.Linear(n_observations, 48)
+        self.layer1 = nn.Linear(self.input_dim, 48)
         self.layer2 = nn.Linear(48, output_dim)
-        self.reshape_layer = lambda x: x.view(-1, n_actions, self.num_atoms)  # Lambda layer for reshaping
+        self.reshape_layer = lambda x: x.view(-1, self.action_dim, self.num_atoms)  # Lambda layer for reshaping
 
     # Called with either one element to determine next action, or a batch
     # during optimization. Returns tensor([[left0exp,right0exp]...]).
@@ -32,7 +34,7 @@ class CategoricalDQNNet(nn.Module):
         x = F.softmax(x, dim=-1)
 
         action_values = torch.tensordot(x, self.atoms, dims=1)
-        print("DEBUG: Action values evolution --:", action_values[0])
+        print("DEBUG: ###: Action values in NN evolution --:", action_values[0])
         # Create an index of the max action value in each batch
         idx = torch.argmax(action_values, dim=1).to(torch.int64)
         idx = idx.view(x.shape[0], 1, 1).expand(-1, -1, self.num_atoms)

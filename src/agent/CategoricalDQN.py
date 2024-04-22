@@ -39,8 +39,8 @@ class CategoricalDQNAgent:
 
         self.env = None
         # copying weights of base_net to policy_net and target_net
-        self.policy_net = CategoricalDQNNet(self.input_dim, self.action_dim, self.config)
-        self.target_net = CategoricalDQNNet(self.input_dim, self.action_dim, self.config)
+        self.policy_net = CategoricalDQNNet(self.config)
+        self.target_net = CategoricalDQNNet(self.config)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.optimizer = optim.AdamW(self.policy_net.parameters(), lr=self.LR, amsgrad=True)
         self.criterion = nn.CrossEntropyLoss()
@@ -175,8 +175,6 @@ class CategoricalDQNAgent:
         action_batch = torch.cat(batch.action)
         reward_batch = torch.cat(batch.reward)
 
-        _, histo = self.policy_net(state_batch)
-
         # Compute V(s_{t+1}) for all next states.
         # Expected values of actions for non_final_next_states are computed based
         # on the "older" target_net; selecting their best reward with max(1).values
@@ -197,6 +195,7 @@ class CategoricalDQNAgent:
         
         # perform TD update 
         discount = self.GAMMA * non_final_mask
+        # check do I really need to reshape discount again? TODO 
         atoms_next = reshaped_reward_batch + torch.from_numpy(np.dot(discount.reshape(self.BATCH_SIZE, 1),
                                       self.atoms.reshape(1, self.n_atoms)))
         # constrain atoms_next to be within Vmin and Vmax
@@ -222,14 +221,15 @@ class CategoricalDQNAgent:
             for j in range(l[i].size(0)):
                 target_histo[i, l[i][j]] += d_m_l[i][j]  # Update d_m_l
                 target_histo[i, l[i][j]] += d_m_u[i][j]  # Update d_m_u
+
+        _, histo = self.policy_net(state_batch)
         
         # print("DEBUG: 3: histo.shape, target_histo.shape", histo.shape, target_histo.shape)
         # Compute CrossEntropyLoss
         loss = self.criterion(histo, target_histo)
         print("DEBGGING histo:", histo[0], torch.sum(histo[0]))
         print("DEBGGING target_histo:", target_histo[0], torch.sum(target_histo[0]))
-        print()
-
+        
         # Optimize the model
         self.optimizer.zero_grad()
         loss.backward()

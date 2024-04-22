@@ -2,15 +2,17 @@
 from src.utils.replay_memory import ReplayMemory, Transition
 from src.utils.epsilon_greedy import select_action
 from src.utils.visualization import plot_durations
+from scipy.optimize import minimize, root
 import numpy as np
 import torch.optim as optim
 import torch.nn as nn
 import torch.nn.functional as F
 from collections import deque
-from src.network.DQN_net import *
-import gym
+from src.network.ExpectileDQN_net import ExpectileDQNNet, expectile_regression_loss
+import random
 from itertools import count
-
+import math
+import torch
 
 class ExpectileDQNAgent:
 
@@ -34,10 +36,11 @@ class ExpectileDQNAgent:
 
         self.env = None
         # copying weights of base_net to policy_net and target_net
-        self.policy_net = DQNNet(self.input_dim, self.action_dim)
-        self.target_net = DQNNet(self.input_dim, self.action_dim)
+        self.policy_net = ExpectileDQNNet(config)
+        self.target_net = ExpectileDQNNet(config)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.optimizer = optim.AdamW(self.policy_net.parameters(), lr=self.LR, amsgrad=True)
+        self.criterion = expectile_regression_loss
 
         self.replay_buffer_size = config.replay_buffer_size
         self.replay_memory = ReplayMemory(self.replay_buffer_size)
@@ -67,7 +70,7 @@ class ExpectileDQNAgent:
         done: boolean, whether the game has ended or not.
         """
         for i_episode in range(self.num_episodes):
-            state, infor = self.env.reset() 
+            state, info = self.env.reset() 
             state = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
 
             print('Episode: {} Reward: {} Max_Reward: {}'.format(i_episode, self.check_model_improved[0].item(), self.best_max[0].item()))
@@ -75,7 +78,7 @@ class ExpectileDQNAgent:
             self.check_model_improved = 0
             
             for t in count():
-                action = select_action(self, state)
+                action = select_action(state)
                 observation, reward, terminated, truncated, _ = self.env.step(action.item())
                 reward = torch.tensor([reward], device=self.device)
                 done = terminated or truncated
@@ -93,8 +96,6 @@ class ExpectileDQNAgent:
                 self.total_steps += 1
 
                 # Perform one step of the optimization (on the policy network)
-                # TODO see how to make differently than in Pytorch tutorial: optimize_model()
-                # this is done partly in train_by_replay
                 # Note difference in previous implementation -> cleared buffer after replay 
                 # and waited until buffer size was reached instead of batch size
                 # if len(self.replay_buffer) == self.replay_buffer_size:
@@ -120,6 +121,7 @@ class ExpectileDQNAgent:
 
             if self.check_model_improved > self.best_max:
                 self.best_max = self.check_model_improved
+
 
     def train_by_replay(self):
         """
@@ -156,22 +158,43 @@ class ExpectileDQNAgent:
         # on the "older" target_net; selecting their best reward with max(1).values
         # This is merged based on the mask, such that we'll have either the expected
         # state value or 0 in case the state was final.
-        next_state_values = torch.zeros(self.BATCH_SIZE, device=self.device)
+        expectile_next = torch.zeros(self.BATCH_SIZE, self.action_dim, self.num_expectiles, device=self.device)
         with torch.no_grad():
-            next_state_values[non_final_mask] = self.target_net(non_final_next_states).max(1).values
-        # Compute the expected Q values 
-        expected_state_action_values = (next_state_values * self.GAMMA) + reward_batch
+            expectile_next[non_final_mask], _ = self.target_net(non_final_next_states)
+            action_value_next = expectile_next[:, :, self.expectile_mean_idx]
+            action_next = np.argmax(action_value_next, axis=1) 
 
-        # Compute Huber loss
-        criterion = nn.SmoothL1Loss()
-        loss = criterion(state_action_values, expected_state_action_values.unsqueeze(1))
+            # choose the optimal expectile next
+            expectile_next = expectile_next[np.arange(self.BATCH_SIZE), action_next, :]
+        
+            # The following part corresponds to Algorithm 2 in the paper
+            # after getting the target expectile (or expectile_next), we need to impute the distribution
+            # from the target expectile. This imputation step effectively re-generate the distribution
+            # from the statistics (expectile)
+            # Note that in the paper the authors assume dirac form to approximate a continuous PDF.
+            # Therefore, the following steps generate several points on the x-axis of the PDF, each with an equal height
+            # A visualization of this process is in figure 10 of the appendix section A of the paper
+            z = self.imputation_strategy(expectile_next)
 
+            # match the rewards and the discount rates from the memory to the same size as the expectile_next
+            reshaped_reward_batch = np.tile(reward_batch.reshape(self.BATCH_SIZE, 1), (1, self.num_imputed_samples))
+        
+        discount_rate =  self.GAMMA * non_final_mask
+
+        # TD update
+        z = reshaped_reward_batch + discount_rate * z # NOTE check may need to still reshape discount rate if no broadcasting with final_mask
+        
+        _, optimal_action_expectiles = self.policy_net(state_batch)
+
+        # Expectile regression loss
+        loss = self.criterion(optimal_action_expectiles, z)
         # Optimize the model
         self.optimizer.zero_grad()
         loss.backward()
         # In-place gradient clipping
         torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
         self.optimizer.step()
+
 
     def eval_step(self, render=True):
         """
@@ -208,4 +231,64 @@ class ExpectileDQNAgent:
         # plot_durations(self, show_result=True)
 
 
+    def select_action(self, state):
 
+        sample = random.random()
+        eps_threshold = self.config.EPS_END + (self.config.EPS_START - self.config.EPS_END) * \
+            math.exp(-1. * self.steps_done / self.config.EPS_DECAY)
+        self.steps_done += 1
+        if sample > eps_threshold:
+            with torch.no_grad():
+                # neural network returns expectile value
+                # action value (Q): middle of all expectile values
+                expectile_values, _ = self.policy_net.predict(state)
+                action_value = expectile_values[0, :, self.expectile_mean_idx] 
+
+                # t.max(1) will return the largest column value of each row.
+                # second column on max result is index of where max element was
+                # found, so we pick action with the larger expected reward.
+                return action_value.max(1).indices.view(1, 1)
+        else:
+            return torch.tensor([[self.env.action_space.sample()]], device=self.device, dtype=torch.long)
+
+
+    def imputation_strategy(self, expectile_next_batch):
+        result_collection = np.zeros(shape=(self.batch_size, self.num_imputed_samples))
+        start_vals = np.linspace(self.config.z_val_limits[0], self.config.z_val_limits[1], self.num_imputed_samples)
+        
+        for idx in range(self.batch_size):
+            if self.imputation_method == "minimization":
+                # To be discussed, I think this is pretty much problem-dependent
+                # The bounds here limit the possible options of z
+                # Having bounds could potentially avoid crazy z
+                bnds = self.config.imputation_distribution_bounds
+                optimization_results = minimize(self.minimize_objective_fc, args=(expectile_next_batch[idx, :]),
+                                                x0=start_vals, bounds=bnds, method="SLSQP")
+            elif self.imputation_method == "root":
+                # the default root method is "hybr", it requires the input shape of x to be the same as
+                # the output shape of the root results
+                # in this case, it means that the imputed sample size is required to be exactly the same
+                # as the number of expectiles
+                optimization_results = root(self.root_objective_fc, args=(expectile_next_batch[idx, :]),
+                                            x0=start_vals, method="hybr")
+                result_collection[idx, :] = optimization_results.x
+        return result_collection
+        
+
+    def minimize_objective_fc(self, x, expect_set):
+        vals = 0
+        for idx, each_expectile in enumerate(expect_set):
+            diff = x - each_expectile
+            diff = np.where(diff > 0, - self.cum_density[idx] * diff, (self.cum_density[idx] - 1) * diff)
+            vals += np.square(np.mean(diff))
+
+        return vals
+
+
+    def root_objective_fc(self, x, expect_set):
+        vals = []
+        for idx, each_expectile in enumerate(expect_set):
+            diff = x - each_expectile
+            diff = np.where(diff > 0, - self.cum_density[idx] * diff, (self.cum_density[idx] - 1) * diff)
+            vals.append(np.mean(diff))
+        return vals

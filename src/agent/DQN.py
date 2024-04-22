@@ -61,7 +61,7 @@ class DQNAgent:
         done: boolean, whether the game has ended or not.
         """
         for i_episode in range(self.num_episodes):
-            state, infor = self.env.reset() 
+            state, info = self.env.reset() 
             state = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
 
             print('Episode: {} Reward: {} Max_Reward: {}'.format(i_episode, self.check_model_improved[0].item(), self.best_max[0].item()))

@@ -37,6 +37,7 @@ class QuantileDQNAgent:
         self.target_net = DQNNet(self.input_dim, self.action_dim)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.optimizer = optim.AdamW(self.policy_net.parameters(), lr=self.LR, amsgrad=True)
+        # Own loss to implement TODO Quantile Huber loss
 
         self.replay_buffer_size = config.replay_buffer_size
         self.replay_memory = ReplayMemory(self.replay_buffer_size)
