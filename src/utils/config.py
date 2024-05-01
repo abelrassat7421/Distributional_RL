@@ -43,9 +43,8 @@ class Config:
         #                Specilaized Parameters for each RL Algorithm 
         # -----------------------------------------------------------------------
 
-
         # Categorical DQN parameters
-        self.categorical_Vmin = 0 # TODO probably link to self.z_val_limits for expectile code
+        self.categorical_Vmin = 0
         self.categorical_Vmax = 100
         self.categorical_n_atoms = 51
 
@@ -70,9 +69,6 @@ class Config:
         if self.imputation_method == "root":
             assert self.num_expectiles == self.num_imputed_samples, \
                 "if you use root method, the number of imputed samples must be equal to the number of expectiles"
-
-        # a2c parameters
-        self.head_out_dim = 20
         
         # Laplace Code parameters
         self.num_gamma = 50

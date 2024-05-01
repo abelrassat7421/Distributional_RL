@@ -5,7 +5,7 @@ import numpy as np
 import torch.optim as optim
 import torch.nn as nn
 import torch.nn.functional as F
-from CategoricalDQN_net import *
+from src.network.CategoricalDQN_net import *
 from itertools import count
 import random
 import math
@@ -157,6 +157,8 @@ class CategoricalDQNAgent:
         cum_reward_per_episode = np.array([self.model_reward_hist[i][1] for i in range(len(self.model_reward_hist))])
         np.save('rewards.npy', cum_reward_per_episode)
         np.save('losses.npy', np.array(self.model_loss_hist))
+        torch.save(self.policy_net.state_dict(), "policy_net_weights.pth")
+        torch.save(self.target_net.state_dict(), "target_net_weights.pth")
 
         # Plot the loss curve
         # plt.plot(self.model_loss_hist)
