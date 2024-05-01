@@ -5,7 +5,7 @@ import numpy as np
 import torch.optim as optim
 import torch.nn as nn
 import torch.nn.functional as F
-from src.network.CategoricalDQN_net import *
+from CategoricalDQN_net import *
 from itertools import count
 import random
 import math
@@ -22,10 +22,10 @@ class CategoricalDQNAgent:
         self.vmax = config.categorical_Vmax
         self.n_atoms = config.categorical_n_atoms
         
-        self.atoms = np.linspace(
-            config.categorical_Vmin,
-            config.categorical_Vmax,
-            config.categorical_n_atoms,
+        self.atoms = torch.linspace(
+            float(self.vmin),
+            float(self.vmax),
+            self.n_atoms,
         )  # Z
 
         self.total_steps = 0
@@ -49,8 +49,6 @@ class CategoricalDQNAgent:
         self.replay_memory = ReplayMemory(self.replay_buffer_size)
 
         self.delta_z = (config.categorical_Vmax - config.categorical_Vmin) / float(config.categorical_n_atoms - 1)
-
-        # self.keras_check = config.keras_checkpoint
         
         self.episode_durations = []
         self.check_model_improved = torch.tensor([0])
@@ -63,6 +61,8 @@ class CategoricalDQNAgent:
         # plt.ion()
         # # Create a figure and axis object
         # self.fig, self.ax = plt.subplots()
+        self.model_reward_hist = []
+        self.model_loss_hist = []
 
         # # Initialize a line object on the axis; for example, starting with no data
         # self.line, = self.ax.plot([], [], 'r-')  # 'r-' is the color and line style (red line)
@@ -70,14 +70,14 @@ class CategoricalDQNAgent:
         # # Set axis limits
         # self.ax.set_xlim(0, 10)
         # self.ax.set_ylim(-1, 1)
-        # Function to update the plot
+        # #Function to update the plot
     
 
     # def update_plot(self, x, y):
     #     self.line.set_xdata(x)
     #     self.line.set_ydata(y)
     #     self.ax.relim()  # Recalculate limits
-    #     self.ax.autoscale_view(True, True, True)  # Autoscale view based on the data
+    #     self.ax.autoscale_view(True, True, True) # Autoscale view based on the data
     #     self.fig.canvas.draw()  # Redraw the figure
     #     self.fig.canvas.flush_events()  # Process GUI events
 
@@ -141,21 +141,44 @@ class CategoricalDQNAgent:
 
                 if done:
                     self.episode_durations.append(t + 1)
-                    #plot_durations(self)
+                    
+                    self.model_reward_hist.append((i_episode, self.check_model_improved.detach().numpy()))
+                    # x= [self.model_reward_hist[i][0] for i in range(len(self.model_reward_hist))]
+                    # y= [self.model_reward_hist[i][1] for i in range(len(self.model_reward_hist))]
+                    # self.update_plot(self, x, y)
                     break
                 else:
                     self.check_model_improved += reward
 
             if self.check_model_improved > self.best_max:
                 self.best_max = self.check_model_improved
+        
+        # Save the losses to a numpy array
+        cum_reward_per_episode = np.array([self.model_reward_hist[i][1] for i in range(len(self.model_reward_hist))])
+        np.save('rewards.npy', cum_reward_per_episode)
+        np.save('losses.npy', np.array(self.model_loss_hist))
 
+        # Plot the loss curve
+        # plt.plot(self.model_loss_hist)
+        # plt.xlabel('Epoch')
+        # plt.ylabel('Loss')
+        # plt.title('Training Loss')
+        # plt.show()
+
+        # x= [self.model_reward_hist[i][0] for i in range(len(self.model_reward_hist))]
+        # y= [self.model_reward_hist[i][1] for i in range(len(self.model_reward_hist))]
+        # plt.plot(x, y)
+        # plt.xlabel('Episode')
+        # plt.ylabel('reward')
+        # plt.title('Model improvement')
+        # plt.show()
 
     def train_by_replay(self):
         """
         TD update by replaying the history.
         """
         # step 1: generate replay samples (size = self.batch_size) from the replay buffer
-        # e.g. uniform random replay or prioritize experience replay
+        # e.g. uniform random replay or prioritize experience replay NOTE (for now only uniform replay)
         if len(self.replay_memory) < self.BATCH_SIZE:
             return
         transitions = self.replay_memory.sample(self.BATCH_SIZE)
@@ -166,7 +189,7 @@ class CategoricalDQNAgent:
         batch = Transition(*zip(*transitions))
 
         # Compute a mask of non-final states and concatenate the batch elements
-        # (a final state would've been the one after which simulation ended)
+        # (a final state would've been the one after which the imulation ended)
         non_final_mask = torch.tensor(tuple(map(lambda s: s is not None,
                                             batch.next_state)), device=self.device, dtype=torch.bool)
         non_final_next_states = torch.cat([s for s in batch.next_state
@@ -183,21 +206,20 @@ class CategoricalDQNAgent:
         action_prob_next = torch.zeros(self.BATCH_SIZE, self.action_dim, self.n_atoms, device=self.device)
         with torch.no_grad():
             action_prob_next[non_final_mask], _ = self.target_net(non_final_next_states)
-            action_value_next = np.dot(np.array(action_prob_next), self.atoms)
-            action_next = np.argmax(action_value_next, axis=1)
+            action_value_next = torch.tensordot(action_prob_next, self.atoms, dims=1)
+            action_next = torch.argmax(action_value_next, axis=1).to(torch.int64)
             
-            #print("DEBUG: 2: action_prob_next.shape", action_prob_next.shape)
+            # print("DEBUG: 2: action_prob_next.shape", action_prob_next.shape)
             # use the optimal actions as index, pick out the probabilities of the optimal action
-            prob_next = action_prob_next[np.arange(self.BATCH_SIZE), action_next, :]
+            prob_next = action_prob_next[torch.arange(self.BATCH_SIZE), action_next, :]
 
-            # match the rewards from the memory to the same size as the prob_next
-            reshaped_reward_batch = torch.tile(reward_batch.reshape(self.BATCH_SIZE, 1), (1, self.n_atoms))
+        # match the rewards from the memory to the same size as prob_next
+        reshaped_reward_batch = torch.tile(reward_batch.reshape(self.BATCH_SIZE, 1), (1, self.n_atoms))
         
         # perform TD update 
         discount = self.GAMMA * non_final_mask
-        # check do I really need to reshape discount again? TODO 
-        atoms_next = reshaped_reward_batch + torch.from_numpy(np.dot(discount.reshape(self.BATCH_SIZE, 1),
-                                      self.atoms.reshape(1, self.n_atoms)))
+        atoms_next = reshaped_reward_batch + torch.matmul(discount.reshape(self.BATCH_SIZE, 1),
+                                      self.atoms.reshape(1, self.n_atoms))
         # constrain atoms_next to be within Vmin and Vmax
         atoms_next = torch.clip(atoms_next, self.vmin, self.vmax)
         # calculate the floors and ceilings of atom_next
@@ -224,11 +246,14 @@ class CategoricalDQNAgent:
 
         _, histo = self.policy_net(state_batch)
         
-        # print("DEBUG: 3: histo.shape, target_histo.shape", histo.shape, target_histo.shape)
+        # print("DEBUG: 6: histo.shape, target_histo.shape", histo.shape, target_histo.shape) #TODO D1
         # Compute CrossEntropyLoss
         loss = self.criterion(histo, target_histo)
-        print("DEBGGING histo:", histo[0], torch.sum(histo[0]))
-        print("DEBGGING target_histo:", target_histo[0], torch.sum(target_histo[0]))
+        loss_for_plot = loss.detach().numpy()
+        self.model_loss_hist.append(loss_for_plot)
+        # print("DEBUG: 7 -- loss:", loss)
+        #print("DEBGGING histo:", histo[0], torch.sum(histo[0])) TODO D
+        #print("DEBGGING target_histo:", target_histo[0], torch.sum(target_histo[0])) TODO D
         
         # Optimize the model
         self.optimizer.zero_grad()
@@ -236,6 +261,7 @@ class CategoricalDQNAgent:
         # In-place gradient clipping
         torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
         self.optimizer.step()
+
 
     def eval_step(self, render=True):
         """
@@ -252,7 +278,7 @@ class CategoricalDQNAgent:
             self.check_model_improved = 0
 
             for t in count():
-                action = self.select_action(self, state)
+                action = self.select_action(state)
                 observation, reward, terminated, truncated, _ = self.env.step(action.item())
                 reward = torch.tensor([reward], device=self.device)
                 done = terminated or truncated 
@@ -270,14 +296,9 @@ class CategoricalDQNAgent:
         print('Complete')
         # plot_durations(self, show_result=True)
 
-    # NOTE Maybe better to create an abstract class of Agents with this method
+
+    # NOTE Create an abstract class of Agents with this method
     def select_action(self, state):
-        atoms = torch.linspace(
-            float(self.vmin),
-            float(self.vmax),
-            self.n_atoms,
-        )  # Z
-        
         sample = random.random()
         eps_threshold = self.config.EPS_END + (self.config.EPS_START - self.config.EPS_END) * \
             math.exp(-1. * self.steps_done / self.config.EPS_DECAY)
@@ -288,13 +309,15 @@ class CategoricalDQNAgent:
                 # size = (1, action dimension, number of atoms)
                 # e.g. size = (1, 2, 51)
                 action_prob, _ = self.policy_net(state)
-                action_values = torch.tensordot(action_prob, atoms, dims=1)
-                print("DEBUG: 1: action_values in action selection: ", action_values[0])
+                action_values = torch.tensordot(action_prob, self.atoms, dims=1)
+                # print("DEBUG: 1: action_values in action selection: ", action_values[0]) TODO D
 
                 # t.max(1) will return the largest column value of each row.
                 # second column on max result is index of where max element was
                 # found, so we pick action with the larger expected reward.
-                return action_values.max(1).indices.view(1, 1)
+                max_actions = action_values.max(1).indices.view(1, 1)
+                # print("DEBUG #1: ", max_actions[0, :]) #TODO D1
+                return max_actions
         else:
             return torch.tensor([[self.env.action_space.sample()]], device=self.device, dtype=torch.long)
 

@@ -76,7 +76,7 @@ def SVD_discrete_linear_decoder(y_h_vect, gammas, sensitivities, time_horizon):
 
 def linear_decoder_least_square_solution(y_h_diff, gammas, time_horizon, alpha):
     # might want to change the temporal resolution to smaller than timestep of the MP TODO
-    # (for better regularization by smoothing the τ -space across τ) 
+    # (for better regularization by smoothing the τ -space) 
     # for continuous MPs - need to choose discretization of time
     F = np.zeros((len(gammas), len(time_horizon)))
     for i in range(len(gammas)):

@@ -48,7 +48,6 @@ class DQNAgent:
         # for select action (epsilon-greedy)
         self.steps_done = 0
 
-
     def transition(self):
         """
         In transition, the agent simply plays and records
@@ -165,6 +164,7 @@ class DQNAgent:
         # In-place gradient clipping
         torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
         self.optimizer.step()
+
 
     def eval_step(self, render=True):
         """
