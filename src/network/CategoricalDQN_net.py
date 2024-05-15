@@ -21,7 +21,9 @@ class CategoricalDQNNet(nn.Module):
         )  # Z
 
         self.layer1 = nn.Linear(self.input_dim, 24)
-        self.layer2 = nn.Linear(24, output_dim)
+        self.layer2 = nn.Linear(24, 24)
+        self.layer3 = nn.Linear(24, 24)
+        self.layer4 = nn.Linear(24, output_dim)
         self.reshape_layer = lambda x: x.view(-1, self.action_dim, self.num_atoms)  # Lambda layer for reshaping
 
     # Called with either one element to determine next action, or a batch
@@ -29,6 +31,8 @@ class CategoricalDQNNet(nn.Module):
     def forward(self, x):
         x = F.relu(self.layer1(x))
         x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
         x = self.reshape_layer(x)
         x = F.softmax(x, dim=-1)
 

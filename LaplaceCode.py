@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 # Environment
 n_states = 5
-reward_bounds = (-1, 1)
+reward_bounds = (-1, 1) # (Vmin, Vmax) 
 #timestep = 0.01 
 
 # Hyperparameters
@@ -17,7 +17,6 @@ num_it = 10
 # Initialize the state value function V(s) with zeros for a simple environment with 5 states
 V = np.zeros((num_sensitivities, num_gamma, n_states))
 
-# Going to have a buffer system -> check how it's implemented for the expectile code and how I can reuse this system? TODO
 # Example transitions (state, reward, next_state)
 # Assuming a small environment with 5 states and some transitions for illustration
 transitions = [(0, -2, 1), (0, 2, 1), (1, -2, 2), (1, 2, 2), (3, -1, 4), (3, 1, 4), (3, -1, 4), (4, 1, "done"), (4, -1, "done")] # (current state, reward, next state) # how  can I make an absorbing state?
@@ -38,14 +37,11 @@ for h in sensitivities:
                 td_target = tf.math.sigmoid(reward - h) + gamma * V[h][gamma_idx][next_state] # could change to Heaviside step function NOTE
                 td_error = td_target - V[h][gamma_idx][current_state]
                 V[h][gamma_idx][current_state] += lr * td_error
-                # how do we check convergence? TODO
-                # how do we ensure that every state action pair is visited? -> you espilon greedy policy? TODO
                 print(f"Updated values: {V}")
 
 # Final Value Function
 print("Final Value Function:", V, V.shape)
 #plt.plot( )
-
 
 # Translation-invariant Linear Decoder based Post's approximation to the inverse Laplace transform (inspiration from ref. 35)
 # This Linear decoder is more noise-resilient than the one in ref. 35 (used for NMR data in ref. 36) 

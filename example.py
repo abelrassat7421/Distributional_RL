@@ -4,6 +4,8 @@ from src.utils.reproducibility import set_seed
 from src.agent.DQN import DQNAgent
 from src.agent.CategoricalDQN import CategoricalDQNAgent
 from src.agent.ExpectileDQN import ExpectileDQNAgent
+from src.agent.QuantileDQN import QuantileDQNAgent
+from src.agent.LaplaceDQN import LaplaceDQNAgent
 
 import gym
 
@@ -11,7 +13,6 @@ import gym
 # architecture 
 
 def run_DQN_example(game):
-    set_seed(42)
     env = gym.make(game, render_mode="human")
     C = Config(env)
     dqn_agent = DQNAgent(config=C)
@@ -22,9 +23,22 @@ def run_DQN_example(game):
     print('=' * 64)
     print("evaluating.....")
     dqn_agent.eval_step(render=True)
+    
+    
+def run_LaplaceDQN_example(game):
+    env = gym.make(game, render_mode="human")
+    C = Config(env)
+    dqn_agent = LaplaceDQNAgent(config=C)
+    dqn_agent.env = env
+
+    dqn_agent.transition()
+    print("finish training")
+    print('=' * 64)
+    print("evaluating.....")
+    dqn_agent.eval_step(render=True)
+
 
 def run_CategoricalDQN_example(game):
-    set_seed(42)
     env = gym.make(game, render_mode="human")
     C = Config(env)
     dqn_agent = CategoricalDQNAgent(config=C)
@@ -36,8 +50,21 @@ def run_CategoricalDQN_example(game):
     print("evaluating.....")
     dqn_agent.eval_step(render=True)
 
+
+def run_QuantileDQN_example(game):
+    env = gym.make(game, render_mode="human")
+    C = Config(env)
+    dqn_agent = QuantileDQNAgent(config=C)
+    dqn_agent.env = env
+
+    dqn_agent.transition()
+    print("finish training")
+    print('=' * 64)
+    print("evaluating.....")
+    dqn_agent.eval_step(render=True)
+
+
 def run_ExpectileDQN_example(game):
-    set_seed(42)
     env = gym.make(game, render_mode="human")
     C = Config(env)
     dqn_agent = ExpectileDQNAgent(config=C)
@@ -48,12 +75,14 @@ def run_ExpectileDQN_example(game):
     print('=' * 64)
     print("evaluating.....")
     dqn_agent.eval_step(render=True)
+    
 
 if __name__ == '__main__':
     game = 'CartPole-v1'
-
-    # run_DQN_example(game)
-    run_CategoricalDQN_example(game)
+    
+    run_LaplaceDQN_example(game)
+    #run_DQN_example(game)
+    # run_CategoricalDQN_example(game)
     # run_QuantileDQN_example(game)
     # run_ExpectileDQN_example(game)
 

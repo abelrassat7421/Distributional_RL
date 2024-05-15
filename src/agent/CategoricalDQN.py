@@ -1,6 +1,7 @@
 # -*- coding:utf-8 -*-
 from src.utils.replay_memory import ReplayMemory, Transition
 from src.utils.visualization import plot_durations
+from src.utils.reproducibility import set_seed
 import numpy as np
 import torch.optim as optim
 import torch.nn as nn
@@ -37,12 +38,25 @@ class CategoricalDQNAgent:
         self.TAU = config.TAU
         self.device = config.device
 
+        # reproducibility
+        self.seed = config.seed
+        set_seed(self.seed)
+
         self.env = None
         # copying weights of base_net to policy_net and target_net
         self.policy_net = CategoricalDQNNet(self.config)
         self.target_net = CategoricalDQNNet(self.config)
+
+        # loading pretrained weights 
+        # policy_net_saved_weights = torch.load('policy_net_weights_pretrained.pth')
+        # target_net_saved_weights = torch.load('target_net_weights_pretrained.pth')
+        # # Initialize model with the loaded weights
+        # self.policy_net.load_state_dict(policy_net_saved_weights)
+        # self.target_net.load_state_dict(target_net_saved_weights)
+        
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.optimizer = optim.AdamW(self.policy_net.parameters(), lr=self.LR, amsgrad=True)
+        self.scheduler = torch.optim.lr_scheduler.CyclicLR(self.optimizer, base_lr=0.001, max_lr=0.01, mode="triangular2", cycle_momentum=False)
         self.criterion = nn.CrossEntropyLoss()
 
         self.replay_buffer_size = config.replay_buffer_size
@@ -57,29 +71,9 @@ class CategoricalDQNAgent:
         # for select action (epsilon-greedy)
         self.steps_done = 0
 
-        # VISUALISATION
-        # plt.ion()
-        # # Create a figure and axis object
-        # self.fig, self.ax = plt.subplots()
+        # save for plotting evolution during training
         self.model_reward_hist = []
         self.model_loss_hist = []
-
-        # # Initialize a line object on the axis; for example, starting with no data
-        # self.line, = self.ax.plot([], [], 'r-')  # 'r-' is the color and line style (red line)
-
-        # # Set axis limits
-        # self.ax.set_xlim(0, 10)
-        # self.ax.set_ylim(-1, 1)
-        # #Function to update the plot
-    
-
-    # def update_plot(self, x, y):
-    #     self.line.set_xdata(x)
-    #     self.line.set_ydata(y)
-    #     self.ax.relim()  # Recalculate limits
-    #     self.ax.autoscale_view(True, True, True) # Autoscale view based on the data
-    #     self.fig.canvas.draw()  # Redraw the figure
-    #     self.fig.canvas.flush_events()  # Process GUI events
 
 
     def transition(self):
@@ -93,8 +87,11 @@ class CategoricalDQNAgent:
 
         done: boolean, whether the game has ended or not.
         """
+
+        self.env.action_space.seed(self.seed)
+
         for i_episode in range(self.num_episodes):
-            state, info = self.env.reset() 
+            state, info = self.env.reset(seed=self.seed+i_episode) 
             state = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
 
             print('Episode: {} Reward: {} Max_Reward: {}'.format(i_episode, self.check_model_improved[0].item(), self.best_max[0].item()))
@@ -143,8 +140,6 @@ class CategoricalDQNAgent:
                     self.episode_durations.append(t + 1)
                     
                     self.model_reward_hist.append((i_episode, self.check_model_improved.detach().numpy()))
-                    # x= [self.model_reward_hist[i][0] for i in range(len(self.model_reward_hist))]
-                    # y= [self.model_reward_hist[i][1] for i in range(len(self.model_reward_hist))]
                     # self.update_plot(self, x, y)
                     break
                 else:
@@ -153,27 +148,13 @@ class CategoricalDQNAgent:
             if self.check_model_improved > self.best_max:
                 self.best_max = self.check_model_improved
         
-        # Save the losses to a numpy array
+        # Save the losses and rewards to numpy arrays
         cum_reward_per_episode = np.array([self.model_reward_hist[i][1] for i in range(len(self.model_reward_hist))])
         np.save('rewards.npy', cum_reward_per_episode)
         np.save('losses.npy', np.array(self.model_loss_hist))
         torch.save(self.policy_net.state_dict(), "policy_net_weights.pth")
         torch.save(self.target_net.state_dict(), "target_net_weights.pth")
 
-        # Plot the loss curve
-        # plt.plot(self.model_loss_hist)
-        # plt.xlabel('Epoch')
-        # plt.ylabel('Loss')
-        # plt.title('Training Loss')
-        # plt.show()
-
-        # x= [self.model_reward_hist[i][0] for i in range(len(self.model_reward_hist))]
-        # y= [self.model_reward_hist[i][1] for i in range(len(self.model_reward_hist))]
-        # plt.plot(x, y)
-        # plt.xlabel('Episode')
-        # plt.ylabel('reward')
-        # plt.title('Model improvement')
-        # plt.show()
 
     def train_by_replay(self):
         """
@@ -251,8 +232,7 @@ class CategoricalDQNAgent:
         # print("DEBUG: 6: histo.shape, target_histo.shape", histo.shape, target_histo.shape) #TODO D1
         # Compute CrossEntropyLoss
         loss = self.criterion(histo, target_histo)
-        loss_for_plot = loss.detach().numpy()
-        self.model_loss_hist.append(loss_for_plot)
+        self.model_loss_hist.append(loss.detach().numpy())
         # print("DEBUG: 7 -- loss:", loss)
         #print("DEBGGING histo:", histo[0], torch.sum(histo[0])) TODO D
         #print("DEBGGING target_histo:", target_histo[0], torch.sum(target_histo[0])) TODO D
@@ -263,6 +243,8 @@ class CategoricalDQNAgent:
         # In-place gradient clipping
         torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
         self.optimizer.step()
+        self.scheduler.step()
+        print("Testing lr scheduler: self.scheduler.get_last_lr(): ", self.scheduler.get_last_lr())
 
 
     def eval_step(self, render=True):
@@ -271,7 +253,7 @@ class CategoricalDQNAgent:
         :param render: whether to visualize the evaluation or not
         """
         for each_ep in range(self.config.evaluate_episodes):
-            state, info = self.env.reset() 
+            state, info = self.env.reset(seed=self.seed + each_ep) 
             state = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
 
             print('Episode: {} Reward: {} Training_Max_Reward: {}'.format(each_ep, self.check_model_improved[0].item(),
@@ -299,7 +281,6 @@ class CategoricalDQNAgent:
         # plot_durations(self, show_result=True)
 
 
-    # NOTE Create an abstract class of Agents with this method
     def select_action(self, state):
         sample = random.random()
         eps_threshold = self.config.EPS_END + (self.config.EPS_START - self.config.EPS_END) * \

@@ -2,6 +2,7 @@
 from src.utils.replay_memory import ReplayMemory, Transition
 from src.utils.epsilon_greedy import select_action
 from src.utils.visualization import plot_durations
+from src.utils.reproducibility import set_seed
 import numpy as np
 import torch.optim as optim
 import torch.nn as nn
@@ -27,6 +28,10 @@ class DQNAgent:
         self.LR = config.LR
         self.TAU = config.TAU
         self.device = config.device
+        
+        # reproducibility
+        self.seed = config.seed
+        set_seed(self.seed)
 
         self.env = None
         # copying weights of base_net to policy_net and target_net
@@ -59,8 +64,11 @@ class DQNAgent:
 
         done: boolean, whether the game has ended or not.
         """
+        
+        self.env.action_space.seed(self.seed)
+
         for i_episode in range(self.num_episodes):
-            state, info = self.env.reset() 
+            state, info = self.env.reset(seed=self.seed) 
             state = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
 
             print('Episode: {} Reward: {} Max_Reward: {}'.format(i_episode, self.check_model_improved[0].item(), self.best_max[0].item()))
@@ -165,14 +173,13 @@ class DQNAgent:
         torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
         self.optimizer.step()
 
-
     def eval_step(self, render=True):
         """
         Evaluation using the trained target network, no training involved
         :param render: whether to visualize the evaluation or not
         """
         for each_ep in range(self.config.evaluate_episodes):
-            state, info = self.env.reset() 
+            state, info = self.env.reset(seed=self.seed) 
             state = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
 
             print('Episode: {} Reward: {} Training_Max_Reward: {}'.format(each_ep, self.check_model_improved[0].item(),

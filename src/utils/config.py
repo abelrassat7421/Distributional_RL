@@ -12,20 +12,23 @@ class Config:
         state, _ = env.reset()
         self.input_dim = len(state)
 
-        self.num_episodes = 100
+        self.num_episodes = 600
         self.evaluate_episodes = 10
         # note that OpenAI gym has max environment steps (e.g. max_step = 200 for CartPole)
-        self.steps = 500  # Note this may have changed to 500 TODO (check)
+        self.steps = 500 # Note this may have changed to 500 TODO (check)
         self.replay_buffer_size = 10000
 
         # Hyperparameters
         self.BATCH_SIZE = 128
         self.GAMMA = 0.99
-        self.EPS_START = 0.9
+        self.EPS_START = 0.9 # 0.9 if not pre-trained weights
         self.EPS_END = 0.05
-        self.EPS_DECAY = 100 #1000
+        self.EPS_DECAY = 1000
         self.TAU = 0.005
         self.LR = 1e-3
+
+        # reproducibility 
+        self.seed = 42
 
         # Neural network parameters
         # define optimizer in the Neural net class? TODO optimizer = optim.AdamW(policy_net.parameters(), lr=LR, amsgrad=True)
@@ -40,7 +43,7 @@ class Config:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # -----------------------------------------------------------------------
-        #                Specilaized Parameters for each RL Algorithm 
+        #                Specilaized Parameters for each DRL Algorithm 
         # -----------------------------------------------------------------------
 
         # Categorical DQN parameters
@@ -49,8 +52,8 @@ class Config:
         self.categorical_n_atoms = 51
 
         # Quantile Regression DQN parameters
-        self.num_quantiles = 20
-        self.huber_loss_threshold = 1.0
+        self.num_quantiles = 20 
+        self.huber_loss_threshold = 1
         
         # Expetile ER-DQN parameters
         self.num_expectiles = 10 
@@ -72,7 +75,9 @@ class Config:
         
         # Laplace Code parameters
         self.num_gamma = 50
-        self.num_sensitivities = 10
+        self.num_sensitivities = 20
+        self.rmin = 0
+        self.rmax = 2 
         self.learning_rate = 0.1  # not using neural networks for now
         self.alpha = 1 # Regularization parameter for SVD-based Discrete Linear Decoder
 
