@@ -45,7 +45,7 @@ class LaplaceDQNAgent:
         self.num_episodes = config.num_episodes
         self.steps = config.steps
         self.BATCH_SIZE = config.BATCH_SIZE
-        #self.GAMMA = config.GAMMA
+        self.GAMMA = config.GAMMA
         self.LR = config.LR
         self.TAU = config.TAU
         self.device = config.device
@@ -55,7 +55,6 @@ class LaplaceDQNAgent:
         self.rmax = config.rmax
         self.sensitivity_step = (self.rmax - self.rmin) / self.num_sensitivities
         self.sensitivities = torch.arange(self.rmin, self.rmax, self.sensitivity_step)
-        print("DEBUG self.sensitivities", self.sensitivities)
         self.middle_sensitivities = torch.tensor([torch.true_divide(self.sensitivities[i] + self.sensitivities[i+1], 2) for i in range(self.sensitivities.shape[0]-1)])
         # self.middle_sensitivities = torch.tensor([1]) # for 1 sensitivity TODO
         # self.sensitivities = torch.tensor([1]) # for 1 sensitivity TODO
@@ -78,9 +77,9 @@ class LaplaceDQNAgent:
         self.criterion = nn.SmoothL1Loss()
 
         self.replay_buffer_size = config.replay_buffer_size
-        # self.replay_memory = ReplayMemory(self.replay_buffer_size) # for 1 gamma
+        self.replay_memory = ReplayMemory(self.replay_buffer_size) # for 1 gamma
         # have a replay buffer for every gamma (leads to different policies for each)
-        self.replay_buffers = [ReplayMemory(self.replay_buffer_size) for _ in range(self.num_gamma)]
+        #self.replay_buffers = [ReplayMemory(self.replay_buffer_size) for _ in range(self.num_gamma)]
         
         self.episode_durations = []
         self.check_model_improved = torch.tensor([0])
@@ -147,12 +146,20 @@ class LaplaceDQNAgent:
 
                 if done:
                     self.episode_durations.append(t + 1)
+                    self.model_reward_hist.append((i_episode, self.check_model_improved.detach().numpy()))
                     break
                 else:
                     self.check_model_improved += reward
 
             if self.check_model_improved > self.best_max:
                 self.best_max = self.check_model_improved
+                
+        # Save the losses and rewards to numpy arrays
+        cum_reward_per_episode = np.array([self.model_reward_hist[i][1] for i in range(len(self.model_reward_hist))])
+        np.save('reward_laplace.npy', cum_reward_per_episode)
+        np.save('losses_laplace.npy', np.array(self.model_loss_hist))
+        torch.save(self.policy_net.state_dict(), "policy_net_weights_laplace.pth")
+        torch.save(self.target_net.state_dict(), "target_net_weights_laplace.pth")
 
     def train_by_replay(self):
         """
@@ -190,7 +197,6 @@ class LaplaceDQNAgent:
         # on the "older" target_net; selecting their best reward with max(1).values
         # This is merged based on the mask, such that we'll have either the expected
         # state value or 0 in case the state was final.
-        # next_state_values = torch.zeros(self.BATCH_SIZE, device=self.device) # for 1 sensitivity TODO
         next_output = torch.zeros(self.BATCH_SIZE, self.action_dim, self.num_sensitivities, device=self.device) # for 1 sensitivity 
         with torch.no_grad():
             next_output[non_final_mask] = self.target_net(non_final_next_states)
@@ -207,6 +213,7 @@ class LaplaceDQNAgent:
         
         # Compute Huber loss
         loss = self.criterion(state_action_values, expected_state_action_values)
+        self.model_loss_hist.append(loss.detach().numpy())
         
         # Optimize the model
         self.optimizer.zero_grad()
